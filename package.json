@@ -14,7 +14,7 @@
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
-    "check": "tsc --noEmit",
+    "check": "svelte-check --tsconfig ./tsconfig.json && tsc --noEmit",
     "bump": "bumpp",
     "prepublishOnly": "pnpm run build"
   },
@@ -23,7 +23,14 @@
     "@types/node": "^25.6.2",
     "@unocss/reset": "^66.7.0",
     "bumpp": "^11.1.0",
+    "prettier-plugin-svelte": "^4.0.1",
+    "svelte": "^5.55.9",
+    "svelte-check": "^4.4.8",
     "tsdown": "^0.22.0",
     "typescript": "^6.0.3"
+  },
+  "inlinedDependencies": {
+    "esm-env": "1.2.2",
+    "svelte": "5.55.9"
   }
 }

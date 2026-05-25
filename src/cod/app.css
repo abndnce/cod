@@ -1,0 +1,6 @@
+body {
+  overflow: hidden;
+  height: 100dvh;
+  position: relative;
+  background: var(--m3c-surface-container-lowest);
+}
