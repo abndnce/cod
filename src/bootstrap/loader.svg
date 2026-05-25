@@ -1,0 +1,80 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 32 16"
+  style="color-scheme: light dark; overflow: visible"
+>
+  <style>
+    .codehs-logo {
+      animation: codehs-logo 2.4s ease-in-out forwards;
+      transform-origin: 8px 8px;
+    }
+
+    .cod-logo {
+      animation: cod-logo 2.4s cubic-bezier(.2, .8, .2, 1) forwards;
+      opacity: 0;
+      transform: scale(.38);
+      transform-box: fill-box;
+      transform-origin: center;
+    }
+
+    .loader-text {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 7px;
+      font-weight: 700;
+      letter-spacing: 0;
+      animation: text 2.4s ease-in-out forwards;
+    }
+
+    .removed-text {
+      animation: removed-text 2.4s ease-in-out forwards;
+    }
+
+    @keyframes codehs-logo {
+      0%, 30% { opacity: 1; transform: scale(1); }
+      55%, 100% { opacity: 0; transform: scale(.7); }
+    }
+
+    @keyframes cod-logo {
+      0%, 25% { opacity: 0; transform: scale(.3); }
+      58%, 100% { opacity: 1; transform: scale(1); }
+    }
+
+    @keyframes text {
+      0%, 32% { fill: light-dark(#015189, #8ed8ff); }
+      58%, 100% { fill: currentColor; }
+    }
+
+    @keyframes removed-text {
+      0%, 32% { opacity: 1 }
+      58%, 100% { opacity: 0 }
+    }
+  </style>
+
+  <g class="codehs-logo">
+    <path fill="none" stroke="light-dark(#24a9e0, #8ed8ff)" stroke-linejoin="round" stroke-width=".64" d="M1.8 1.15h12.55v9.45H1.8z" />
+    <path fill="light-dark(#24a9e0, #8ed8ff)" d="M2.4 14.8c-.17-.09-.18-.12-.19-.66v-.48l.12-.68c.06-.38.13-.7.14-.74s.05-.08.08-.1l.07-.07h1.43l1.43-.01.01-.15c.03-.23.11-.53.2-.76l.1-.23h4.57l.08.2c.1.22.19.55.21.78l.02.16h1.4c1.37 0 1.4 0 1.48.05q.09.05.11.12a9 9 0 0 1 .25 1.85c0 .57 0 .62-.13.7-.07.05-.21.05-5.68.05-5.32 0-5.62 0-5.7-.03m10.87-.73v-.13H2.87l-.02.1v.12c.02.03.8.04 5.22.04h5.2Zm-.1-1.07-.06-.29H3.02l-.04.24-.05.3-.02.05h10.3Zm-3.15-.99c0-.1-.08-.4-.14-.56l-.18-.33-.1-.2H6.55l-.07.13a2 2 0 0 0-.35.89l-.02.12h1.95c1.95 0 1.95 0 1.95-.05" />
+    <path fill="none" stroke="light-dark(#24a9e0, #8ed8ff)" stroke-linejoin="round" stroke-width=".64" d="M2.93 2.34h10.28v7.1H2.93z" />
+    <rect x="3.964" y="3.276" width="6.006" height=".95" rx=".054" fill="light-dark(#015189, #8ed8ff)" />
+    <rect x="10.588" y="3.276" width="1.591" height=".95" rx=".054" fill="light-dark(#005ba7, #7ccfff)" />
+    <rect x="3.964" y="4.7" width="1.591" height=".95" rx=".054" fill="light-dark(#005ba7, #7ccfff)" />
+    <rect x="6.172" y="4.7" width="1.591" height=".95" rx=".054" fill="light-dark(#2273b9, #9edfff)" />
+    <rect x="8.38" y="4.7" width="3.798" height=".95" rx=".054" fill="light-dark(#1899d5, #aee7ff)" />
+    <rect x="3.964" y="6.125" width="3.798" height=".95" rx=".054" fill="light-dark(#24a9e0, #b7ecff)" />
+    <rect x="8.38" y="6.125" width="1.591" height=".95" rx=".054" fill="light-dark(#5facde, #c8f1ff)" />
+    <rect x="10.588" y="6.125" width="1.591" height=".95" rx=".054" fill="light-dark(#5facde, #c8f1ff)" />
+    <rect x="3.964" y="7.549" width="1.591" height=".95" rx=".054" fill="light-dark(#61b6e5, #d7f5ff)" />
+    <rect x="6.172" y="7.549" width="3.798" height=".95" rx=".054" fill="light-dark(#8ec6e8, #e4f9ff)" />
+    <rect x="10.588" y="7.549" width="1.591" height=".95" rx=".054" fill="light-dark(#8ec6e8, #e4f9ff)" />
+  </g>
+
+  <g class="cod-logo" shape-rendering="crispEdges">
+    <path fill="#c6a271" d="M11 1h1v1H11zM12 3h1v1H12zM10 4h1v1H10zM8 5h1v1H8zM10 5h1v1H10zM6 6h2v1H6zM9 6h1v1H9zM6 7h1v1H6zM8 7h1v1H8zM4 8h2v1H4zM9 8h1v1H9zM5 9h1v1H5zM8 9h1v1H8zM3 10h2v1H3zM6 10h1v1H6zM4 11h1v1H4zM6 11h1v1H6zM3 12h3v1H3z" />
+    <path fill="#b18953" d="M12 1h1v1H12zM13 3h1v1H13zM5 4h2v1H5zM11 4h2v1H11zM4 5h1v1H4zM9 5h1v1H9zM4 6h1v1H4zM8 6h1v1H8zM10 6h1v1H10zM5 7h1v1H5zM7 7h1v1H7zM9 7h1v1H9zM6 8h1v1H6zM7 10h1v1H7zM5 11h1v1H5zM3 13h2v1H3z" />
+    <path fill="#d6c5ad" d="M11 2h2v1H11zM10 3h2v1H10zM5 5h2v1H5zM5 6h1v1H5zM7 8h2v1H7zM6 9h2v1H6z" />
+    <path fill="#986d4e" d="M13 2h1v1H13zM14 3h1v1H14zM8 4h2v1H8zM13 4h2v1H13zM7 5h1v1H7zM11 5h2v1H11zM4 7h1v1H4zM10 7h1v1H10zM3 8h1v1H3zM10 8h1v1H10zM3 9h2v1H3zM9 9h1v1H9zM2 10h1v1H2zM5 10h1v1H5zM8 10h2v1H8zM2 11h1v1H2zM7 11h2v1H7zM2 12h1v1H2zM6 12h2v1H6zM5 13h1v1H5z" />
+    <path fill="#6b442b" d="M13 5h2v1H13zM11 6h1v1H11zM11 7h1v1H11zM11 8h1v1H11zM10 9h1v1H10zM10 10h1v1H10zM9 11h1v1H9zM8 12h1v1H8zM2 13h1v1H2zM6 13h2v1H6zM3 14h3v1H3z" />
+    <path fill="#000" d="M3 11h1v1H3z" />
+  </g>
+
+  <text class="loader-text" x="16" y="10.7"><tspan>Cod</tspan><tspan class="removed-text">eHS</tspan></text>
+</svg>

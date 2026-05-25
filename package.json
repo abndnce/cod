@@ -19,7 +19,9 @@
     "prepublishOnly": "pnpm run build"
   },
   "devDependencies": {
+    "@tsdown/css": "^0.22.0",
     "@types/node": "^25.6.2",
+    "@unocss/reset": "^66.7.0",
     "bumpp": "^11.1.0",
     "tsdown": "^0.22.0",
     "typescript": "^6.0.3"

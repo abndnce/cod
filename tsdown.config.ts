@@ -1,8 +1,12 @@
-import { defineConfig } from "tsdown";
+import { defineConfig } from 'tsdown';
 
 export default defineConfig({
+  platform: 'browser',
+  entry: 'src/bootstrap/index.ts',
   dts: false,
-  platform: "browser",
   exports: true,
-  // ...config options
+  minify: true,
+  loader: {
+    '.svg': 'text',
+  },
 });
