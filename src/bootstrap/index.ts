@@ -3,6 +3,7 @@ import css2 from './bootstrap.css?inline';
 import loader from './loader.svg';
 import abundance from './abundance.svg';
 import { mount } from '../cod/app';
+import { createSession } from '../cod/spawn';
 
 const uid = (Math.random() * 100000).toFixed(0);
 const uidSpinup = fetch(
@@ -28,12 +29,15 @@ abndnce.target = '_blank';
 
 document.body.replaceChildren(button, abndnce);
 
-uidSpinup.then(() => {
+uidSpinup.then(async () => {
+  const session = createSession(uid, window);
+  await session.ready;
+
   button.disabled = false;
   button.onclick = () => {
     const appWindow = window.open('about:blank', '_blank');
     if (!appWindow) throw new Error('failed to open');
 
-    mount(uid, appWindow);
+    mount(uid, appWindow, session);
   };
 });

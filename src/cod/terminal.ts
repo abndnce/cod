@@ -12,10 +12,11 @@ export type TerminalWindow = {
   running: boolean;
   started: boolean;
   failed: boolean;
+  collapsed: boolean;
   lines: TerminalLine[];
 };
 
-type AnsiRange = {
+export type AnsiRange = {
   name: string;
   start: number;
   end: number;
@@ -26,32 +27,6 @@ type TerminalCell = {
   foreground: string;
   bold: boolean;
 };
-
-type HighlightWindow = Window & {
-  CSS: {
-    highlights: HighlightRegistry;
-  };
-  Highlight: typeof Highlight;
-};
-
-const ANSI_HIGHLIGHTS = [
-  'black',
-  'red',
-  'green',
-  'yellow',
-  'blue',
-  'magenta',
-  'cyan',
-  'white',
-  'bright-black',
-  'bright-red',
-  'bright-green',
-  'bright-yellow',
-  'bright-blue',
-  'bright-magenta',
-  'bright-cyan',
-  'bright-white',
-].map((name) => `cod-ansi-${name}`);
 
 const ANSI_COLOR_BY_CODE: Record<number, string> = {
   30: 'black',
@@ -224,47 +199,4 @@ export const renderTerminal = (terminal: TerminalWindow) => {
   });
 
   return { text, ranges };
-};
-
-const clearTerminalHighlights = (appWindow: Window) => {
-  const highlights = (appWindow as HighlightWindow).CSS.highlights;
-  for (const name of ANSI_HIGHLIGHTS) highlights.delete(name);
-};
-
-export const applyTerminalHighlights = (
-  appWindow: Window,
-  terminals: TerminalWindow[],
-  activeTerminalId?: string,
-) => {
-  clearTerminalHighlights(appWindow);
-  if (!activeTerminalId) return;
-
-  const terminal = terminals.find((item) => item.id === activeTerminalId);
-  const pre = appWindow.document.querySelector<HTMLPreElement>(
-    `pre[data-terminal-id="${activeTerminalId}"]`,
-  );
-  const textNode = pre?.firstChild;
-  const highlightWindow = appWindow as HighlightWindow;
-  const highlights = highlightWindow.CSS.highlights;
-  const HighlightCtor = highlightWindow.Highlight;
-  if (!terminal) throw new Error(`active terminal not found: ${activeTerminalId}`);
-  if (!pre) throw new Error(`terminal pre not found: ${activeTerminalId}`);
-  if (textNode?.nodeType !== Node.TEXT_NODE) {
-    throw new Error(`terminal output is not a text node: ${activeTerminalId}`);
-  }
-
-  const rendered = renderTerminal(terminal);
-  if ((textNode.nodeValue ?? '').length !== rendered.text.length) {
-    throw new Error(`terminal highlight text mismatch: ${activeTerminalId}`);
-  }
-
-  const byName = new Map<string, Range[]>();
-  for (const item of rendered.ranges) {
-    const range = appWindow.document.createRange();
-    range.setStart(textNode, item.start);
-    range.setEnd(textNode, item.end);
-    byName.set(item.name, [...(byName.get(item.name) ?? []), range]);
-  }
-  for (const [name, ranges] of byName) highlights.set(name, new HighlightCtor(...ranges));
-  pre.scrollTop = pre.scrollHeight;
 };

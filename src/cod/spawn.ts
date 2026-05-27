@@ -141,12 +141,16 @@ const connectCodeHsSocket = (
   });
 
   const sendEvent = (event: string, data: unknown) => {
-    if (!open || socket.readyState !== WebSocket.OPEN) return;
+    if (!open || socket.readyState !== WebSocket.OPEN) {
+      throw new Error(`spawn socket is not open; cannot send ${event}`);
+    }
     socket.send(`42${JSON.stringify([event, data])}`);
   };
 
   appWindow.setInterval(() => {
-    sendEvent('keepalive', null);
+    if (open && socket.readyState === WebSocket.OPEN) {
+      sendEvent('keepalive', null);
+    }
   }, 20_000);
 
   socket.addEventListener('message', (event: MessageEvent) => {
@@ -219,7 +223,10 @@ export const createSession = (
   appWindow: Window,
   onOutput: SpawnOutputHandler = () => {},
 ) => {
-  const spawnTracker = createSpawnTracker(onOutput);
+  let outputHandler = onOutput;
+  const spawnTracker = createSpawnTracker((stream, data, id) => {
+    outputHandler(stream, data, id);
+  });
   const transferResolvers: Array<() => void> = [];
   const socket = connectCodeHsSocket(uid, appWindow, {
     onStdout: (data) => spawnTracker.handleOutput('stdout', data),
@@ -252,6 +259,9 @@ export const createSession = (
 
   return {
     ready: socket.ready,
+    setOutputHandler(handler: SpawnOutputHandler) {
+      outputHandler = handler;
+    },
     spawnCommand,
     kill(id: string) {
       socket.kill(id);
@@ -271,3 +281,5 @@ export const createSession = (
     },
   };
 };
+
+export type SpawnSession = ReturnType<typeof createSession>;

@@ -1,10 +1,9 @@
 <script lang="ts">
   import type { Attachment } from 'svelte/attachments';
   import cod from '../assets/cod-animation.webp';
-  import { createSession } from './spawn';
+  import type { SpawnSession } from './spawn';
   import TerminalWindow from './TerminalWindow.svelte';
   import {
-    applyTerminalHighlights,
     type TerminalLine,
     type TerminalWindow as TerminalWindowModel,
   } from './terminal';
@@ -19,71 +18,44 @@
     height: number;
   };
 
-  type FirefoxStatus = 'installing' | 'ready' | 'error';
-
-  type LoadingApp = {
-    id: string;
-    title: string;
-    terminalId: string;
-  };
-
   type TaskTerminalOptions = {
     id: string;
     title: string;
     command: string;
+    args?: string[];
+    env?: Record<string, string | number>;
+    type?: 'normal' | 'echopty';
+    track?: boolean;
     onSuccess?: () => void;
     onFailure?: (error: Error) => void;
   };
 
-  type Session = ReturnType<typeof createSession>;
-
   type Props = {
     uid: string;
     appWindow: Window;
+    session: SpawnSession;
   };
 
   const NOVNC_SCRIPT_URL = 'https://static1.codehs.com/lib/noVNC/noVNC.js';
   const REMOTE_DISPLAY_MAX_WIDTH = 1920;
   const REMOTE_DISPLAY_MAX_HEIGHT = 1080;
   const REMOTE_WINDOWS = 'COD_WINDOWS ';
-  const GRAPHICS_READY = 'COD_STAGE graphics-ready';
-  const JWM_READY = 'COD_STAGE jwm-ready';
-  const FIREFOX_READY = 'COD_APP_STATUS firefox ready ';
-  const launchTerminalCommand = String.raw`set -euo pipefail
-export DISPLAY="\${DISPLAY:-:99}"
-if command -v gnome-terminal >/dev/null 2>&1; then
-  gnome-terminal &
-elif command -v x-terminal-emulator >/dev/null 2>&1; then
-  x-terminal-emulator &
-elif command -v xterm >/dev/null 2>&1; then
-  xterm &
-elif command -v uxterm >/dev/null 2>&1; then
-  uxterm &
-elif command -v xfce4-terminal >/dev/null 2>&1; then
-  xfce4-terminal &
-elif command -v lxterminal >/dev/null 2>&1; then
-  lxterminal &
-else
-  echo "No X terminal emulator found" >&2
-  exit 1
-fi
-`;
   const firefoxInstallCommand = String.raw`set -euo pipefail
 echo "Installing Firefox..."
 export PATH="$HOME/.local/bin:$PATH"
 BIN_DIR="$HOME/.local/bin"
-APP_DIR="$HOME/.local/codehs-firefox"
+APP_DIR="$HOME/.local"
 mkdir -p "$BIN_DIR" "$APP_DIR"
+BROWSER="$APP_DIR/firefox/firefox"
 
-if command -v firefox >/dev/null 2>&1; then
-  BROWSER="$(command -v firefox)"
-elif command -v firefox-esr >/dev/null 2>&1; then
-  BROWSER="$(command -v firefox-esr)"
-elif [ -x "$APP_DIR/firefox/firefox" ]; then
-  BROWSER="$APP_DIR/firefox/firefox"
-else
-  ARCHIVE="/tmp/cod-firefox.tar.xz"
+if [ ! -x "$BROWSER" ]; then
+  ARCHIVE="/tmp/codehs-firefox.tar.xz"
+  EXTRACT_DIR="$(mktemp -d "$APP_DIR/firefox-install.XXXXXX")"
   URL="https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64&lang=en-US"
+  cleanup() {
+    rm -rf "$EXTRACT_DIR"
+  }
+  trap cleanup EXIT
   echo "Downloading Firefox from Mozilla..."
   if command -v curl >/dev/null 2>&1; then
     curl -L --fail --retry 2 --max-time 90 -o "$ARCHIVE" "$URL"
@@ -97,27 +69,20 @@ with urllib.request.urlopen(url) as response:
     content_type = response.headers.get('content-type', '')
     if response.status != 200:
         raise RuntimeError(f'unexpected Firefox response: {response.status} {content_type}')
-    with open('/tmp/cod-firefox.tar.xz', 'wb') as f:
+    with open('/tmp/codehs-firefox.tar.xz', 'wb') as f:
         f.write(response.read())
 PY
   fi
   echo "Extracting Firefox..."
+  tar -xf "$ARCHIVE" -C "$EXTRACT_DIR"
   rm -rf "$APP_DIR/firefox"
-  tar -xf "$ARCHIVE" -C "$APP_DIR"
-  BROWSER="$APP_DIR/firefox/firefox"
+  mv "$EXTRACT_DIR/firefox" "$APP_DIR/firefox"
 fi
 
-cat > "$BIN_DIR/cod-firefox" <<EOF
-#!/usr/bin/env bash
-export DISPLAY="\${DISPLAY:-:99}"
-exec "$BROWSER" --no-remote "\$@"
-EOF
-chmod +x "$BIN_DIR/cod-firefox"
-"$BIN_DIR/cod-firefox" --version
-echo "COD_APP_STATUS firefox ready $BIN_DIR/cod-firefox"
+"$BROWSER" --version
+echo "Firefox is ready: $BROWSER"
 `;
-  const remoteProgram = String.raw`import html
-import json
+  const remoteProgram = String.raw`import json
 import os
 import subprocess
 import sys
@@ -139,21 +104,26 @@ GRAPHICS_HEIGHT = 1080
 def say(*parts):
     print(*parts, flush=True)
 
+def say_block(label, text):
+    if not text:
+        return
+    print(label, flush=True)
+    print(text[:2000].rstrip(), flush=True)
+
 def run(cmd, timeout=60, cwd=None, env=None, quiet=False):
     if not quiet:
-        say('COD_RUN', ' '.join(cmd))
+        say('$', ' '.join(cmd))
     try:
         p = subprocess.run(cmd, text=True, capture_output=True, timeout=timeout, cwd=cwd, env=env)
         if not quiet:
-            say('COD_RUN_RC', p.returncode)
-        if p.stdout and not quiet:
-            say('COD_RUN_STDOUT', p.stdout[:2000])
-        if p.stderr and not quiet:
-            say('COD_RUN_STDERR', p.stderr[:2000])
+            say('Command finished with exit code', p.returncode)
+        if not quiet:
+            say_block('Output:', p.stdout)
+            say_block('Errors:', p.stderr)
         return p.returncode == 0, p.stdout, p.stderr
     except Exception as exc:
         if not quiet:
-            say('COD_RUN_ERROR', type(exc).__name__, str(exc))
+            say('Command failed:', type(exc).__name__, str(exc))
         return False, '', str(exc)
 
 def download(url, path, timeout=120):
@@ -197,7 +167,7 @@ def wait_for_display(timeout=8):
     return False
 
 def restart_graphics_stack():
-    say('COD_STAGE graphics-restart', f'{GRAPHICS_WIDTH}x{GRAPHICS_HEIGHT}')
+    say('Restarting graphics stack at', f'{GRAPHICS_WIDTH}x{GRAPHICS_HEIGHT}')
     for pattern in [
         'websockify 1337 :5900',
         'x11vnc .* -display :99',
@@ -211,7 +181,7 @@ def restart_graphics_stack():
         except FileNotFoundError:
             pass
         except Exception as exc:
-            say('COD_WARN remove-display-lock', path, type(exc).__name__, str(exc))
+            say('Warning: could not remove display lock', path, type(exc).__name__, str(exc))
 
     start_background(
         [
@@ -229,7 +199,7 @@ def restart_graphics_stack():
         '/tmp/cod-xvfb.log',
     )
     if not wait_for_display():
-        say('COD_ERROR graphics-xvfb-not-ready')
+        say('Error: Xvfb display did not become ready')
         sys.exit(5)
     run(['xrandr', '-d', ':99', '--current'], timeout=5)
     start_background(
@@ -243,7 +213,7 @@ def restart_graphics_stack():
         cwd='/usr/local/websockify',
     )
     time.sleep(2)
-    say('COD_STAGE graphics-ready', f'{GRAPHICS_WIDTH}x{GRAPHICS_HEIGHT}')
+    say('Graphics stack is ready at', f'{GRAPHICS_WIDTH}x{GRAPHICS_HEIGHT}')
 
 def write_jwmrc(path):
     with open(path, 'w') as f:
@@ -251,8 +221,6 @@ def write_jwmrc(path):
             <?xml version="1.0"?>
             <JWM>
               <RootMenu onroot="123">
-                <Program label="Firefox">{browser}</Program>
-                <Program label="Terminal">gnome-terminal</Program>
                 <Restart label="Restart JWM"/>
                 <Exit label="Exit JWM" confirm="false"/>
               </RootMenu>
@@ -282,7 +250,7 @@ def write_jwmrc(path):
               <Key key="A-Tab">nextstacked</Key>
               <Key key="A-F4">close</Key>
             </JWM>
-        '''.format(browser=html.escape(os.path.join(BIN_DIR, 'cod-firefox')))))
+        '''))
 
 def get_window_title(window_id):
     ok, out, _err = run(['xprop', '-id', window_id, '_NET_WM_NAME', 'WM_NAME'], timeout=2, quiet=True)
@@ -319,7 +287,7 @@ def watch_windows():
             previous = current
         time.sleep(1)
 
-say('COD_STAGE desktop-start')
+say('Starting desktop services')
 restart_graphics_stack()
 try:
     subprocess.run(['xsetroot', '-solid', '#00120a'], timeout=5)
@@ -328,9 +296,9 @@ except Exception:
 
 jwm = extract_jwm()
 if not jwm:
-    say('COD_ERROR no-jwm')
+    say('Error: could not install the window manager')
     sys.exit(2)
-say('COD_STAGE jwm-installed', jwm)
+say('Window manager is ready:', jwm)
 
 jwmrc = os.path.join(tempfile.mkdtemp(prefix='cod-jwmrc-'), 'jwmrc')
 write_jwmrc(jwmrc)
@@ -339,37 +307,37 @@ env['PATH'] = os.path.dirname(jwm) + ':' + BIN_DIR + ':' + env.get('PATH', '')
 wm = subprocess.Popen([jwm, '-f', jwmrc], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
 time.sleep(1)
 if wm.poll() is not None:
-    say('COD_ERROR jwm-exited', wm.returncode)
+    say('Error: window manager exited during startup with code', wm.returncode)
     sys.exit(3)
-say('COD_STAGE jwm-ready')
+say('Desktop is ready')
 threading.Thread(target=watch_windows, daemon=True).start()
 
 while True:
     if wm.poll() is not None:
-        say('COD_ERROR jwm-stopped', wm.returncode)
+        say('Error: window manager stopped with code', wm.returncode)
         sys.exit(4)
     time.sleep(5)
 `;
 
-  let { uid, appWindow }: Props = $props();
+  let { uid, appWindow, session }: Props = $props();
   let loading = $state(true);
-  let session = $state<Session>();
-  let desktopReady = false;
-  let graphicsReady = false;
-  let resolveGraphicsReady: (() => void) | undefined;
   let latestDisplaySize: ScreenSize | undefined;
   let displayResizeTimer = 0;
-  let firefoxInstallStarted = false;
-  let openLogId = $state<string>();
+  let terminalOpen = $state(false);
+  let activeTerminalTab = $state('tasks');
   let terminals = $state<TerminalWindowModel[]>([]);
   let remoteWindows = $state<RemoteWindow[]>([]);
-  let firefoxStatus = $state<FirefoxStatus>('installing');
-  let firefoxLaunchCommand = $state('');
+  let hasSeenRemoteWindow = $state(false);
   let vncScreen: HTMLElement | undefined;
 
-  const openLog = (id: string) => {
-    openLogId = id;
-    appWindow.setTimeout(() => focusTerminalWindow(id));
+  const openTerminalApp = (tab = activeTerminalTab) => {
+    activeTerminalTab = tab;
+    terminalOpen = true;
+    appWindow.setTimeout(focusTerminalApp);
+  };
+
+  const closeTerminalApp = () => {
+    terminalOpen = false;
   };
 
   const loadScript = (document: Document, src: string) =>
@@ -387,42 +355,34 @@ while True:
       document.head.appendChild(script);
     });
 
-  const measureLogicalPixelSize = (element: HTMLElement): ScreenSize => {
-    const rect = element.getBoundingClientRect();
+  const getWindowDisplaySize = (): ScreenSize => ({
+    width: Math.max(1, Math.round(appWindow.innerWidth)),
+    height: Math.max(1, Math.round(appWindow.innerHeight)),
+  });
 
-    return {
-      width: Math.max(1, Math.round(rect.width)),
-      height: Math.max(1, Math.round(rect.height)),
-    };
-  };
-
-  const observeDisplaySize = (
-    screen: HTMLElement,
-    onResize: (size: ScreenSize) => void,
-  ) => {
-    let frame = 0;
+  const observeDisplaySize = (onResize: (size: ScreenSize) => void) => {
+    let timer = 0;
     let lastSize: ScreenSize | undefined;
 
     const emitResize = () => {
-      frame = 0;
-      const size = measureLogicalPixelSize(screen);
+      timer = 0;
+      const size = getWindowDisplaySize();
       if (lastSize?.width === size.width && lastSize.height === size.height) return;
       lastSize = size;
       onResize(size);
     };
 
     const scheduleResize = () => {
-      if (frame) appWindow.cancelAnimationFrame(frame);
-      frame = appWindow.requestAnimationFrame(emitResize);
+      if (timer) appWindow.clearTimeout(timer);
+      timer = appWindow.setTimeout(emitResize);
     };
 
-    const observer = new ResizeObserver(scheduleResize);
-    observer.observe(screen);
+    appWindow.addEventListener('resize', scheduleResize);
     scheduleResize();
 
     return () => {
-      observer.disconnect();
-      if (frame) appWindow.cancelAnimationFrame(frame);
+      appWindow.removeEventListener('resize', scheduleResize);
+      if (timer) appWindow.clearTimeout(timer);
     };
   };
 
@@ -506,11 +466,10 @@ while True:
     };
   };
 
-  const resizeDisplay = (activeSession: Session, size: ScreenSize) => {
+  const resizeDisplay = (size: ScreenSize) => {
     const width = Math.min(size.width, REMOTE_DISPLAY_MAX_WIDTH);
     const height = Math.min(size.height, REMOTE_DISPLAY_MAX_HEIGHT);
     latestDisplaySize = { width, height };
-    if (!graphicsReady) return;
 
     if (displayResizeTimer) appWindow.clearTimeout(displayResizeTimer);
     displayResizeTimer = appWindow.setTimeout(() => {
@@ -521,18 +480,36 @@ while True:
 WIDTH=${target.width}
 HEIGHT=${target.height}
 MODE="\${WIDTH}x\${HEIGHT}"
-if ! xrandr -d :99 --query | awk '{print $1}' | grep -Fxq "$MODE"; then
-  xrandr -d :99 --newmode "$MODE" $(gtf "$WIDTH" "$HEIGHT" 60 | sed -n -e 's/^.*"  //p')
+MODEL="$(gtf "$WIDTH" "$HEIGHT" 60 | sed -n -e 's/^.*"  //p')"
+for _ in $(seq 1 1200); do
+  if xdpyinfo -display :99 >/dev/null 2>&1 && xrandr -d :99 --query >/dev/null 2>&1; then
+    xrandr -d :99 --newmode "$MODE" $MODEL >/dev/null 2>&1 || true
+    xrandr -d :99 --addmode screen "$MODE" >/dev/null 2>&1 || true
+    if xrandr -d :99 --output screen --mode "$MODE" >/dev/null 2>&1; then
+      echo "Display resized to $MODE"
+      exit 0
+    fi
+  fi
+  sleep 0.5
+done
+xdpyinfo -display :99 >/dev/null
+xrandr -d :99 --query >/dev/null
+for _ in $(seq 1 10); do
+  xrandr -d :99 --newmode "$MODE" $MODEL || true
   xrandr -d :99 --addmode screen "$MODE" || true
-fi
-xrandr -d :99 --output screen --mode "$MODE"
-echo "COD_STAGE display-resized $MODE"
+  if xrandr -d :99 --output screen --mode "$MODE"; then
+    echo "Display resized to $MODE"
+    break
+  fi
+  sleep 0.5
+done
+xrandr -d :99 --output screen --mode "$MODE" >/dev/null
 `;
-      activeSession.spawnCommand(
-        `display-resize-${Date.now()}`,
+      startTaskTerminal({
+        id: `task-display-resize-${Date.now()}`,
+        title: `Resize display to ${target.width}x${target.height}`,
         command,
-        { untracked: true },
-      );
+      });
     }, 120);
   };
 
@@ -542,6 +519,7 @@ echo "COD_STAGE display-resized $MODE"
       const windows = (JSON.parse(json) as RemoteWindow[]).filter(
         (window) => typeof window.id === 'string' && typeof window.title === 'string',
       );
+      if (windows.length > 0) hasSeenRemoteWindow = true;
       const windowsById = new Map(windows.map((window) => [window.id, window]));
       const orderedWindows = remoteWindows
         .map((window) => windowsById.get(window.id))
@@ -562,53 +540,29 @@ echo "COD_STAGE display-resized $MODE"
   const handleRemoteOutput = (text: string) => {
     for (const line of text.split('\n')) {
       if (line.startsWith(REMOTE_WINDOWS)) updateRemoteWindows(line);
-      if (line.startsWith(FIREFOX_READY)) {
-        firefoxStatus = 'ready';
-        firefoxLaunchCommand = line.slice(FIREFOX_READY.length).trim() || 'cod-firefox';
-      }
-    }
-    if (text.includes(JWM_READY)) {
-      desktopReady = true;
-      startFirefoxInstall();
-    }
-    if (text.includes(GRAPHICS_READY)) {
-      graphicsReady = true;
-      if (session && latestDisplaySize) resizeDisplay(session, latestDisplaySize);
-      resolveGraphicsReady?.();
-      resolveGraphicsReady = undefined;
-    }
-    if (text.includes('COD_APP_STATUS firefox installing')) {
-      firefoxStatus = 'installing';
-    }
-    if (text.includes('COD_APP_ERROR firefox')) {
-      firefoxStatus = 'error';
     }
   };
 
-  const transferDesktop = (activeSession: Session) => {
-    return activeSession.transfer({
+  const transferDesktop = () => {
+    return session.transfer({
       'main.py': remoteProgram,
     });
   };
 
-  const spawnDesktop = (activeSession: Session) => {
+  const spawnDesktop = () => {
     const command = 'set -e\nsource "./.pyvenv311/bin/activate"\npython -B "$MAIN_FILE"';
 
-    activeSession.spawnCommand('desktop', command, {
+    startTaskTerminal({
+      id: 'task-desktop',
+      title: 'Starting desktop',
+      command,
       args: ['-i', '-c', command],
       type: 'echopty',
       env: {
         MAIN_FILE: 'main.py',
         DEBUG_MODE: 0,
       },
-      untracked: true,
-    });
-  };
-
-  const waitForGraphicsReady = () => {
-    if (graphicsReady) return Promise.resolve();
-    return new Promise<void>((resolve) => {
-      resolveGraphicsReady = resolve;
+      track: false,
     });
   };
 
@@ -617,23 +571,25 @@ echo "COD_STAGE display-resized $MODE"
 
     observeCanvasLogicalSize(screen);
 
-    const activeSession = createSession(uid, appWindow, (stream, data, id) => {
+    session.setOutputHandler((stream, data, id) => {
       const text = String(data ?? '');
-      if (id && (id.startsWith('terminal-') || id.startsWith('task-'))) {
+      if (id && terminals.some((terminal) => terminal.id === id)) {
         appendTerminal(id, stream, text);
       }
 
       if (stream === 'stderr') console.warn('[spawn]', text);
       handleRemoteOutput(text);
     });
-    session = activeSession;
 
-    await activeSession.ready;
-    graphicsReady = false;
-    observeDisplaySize(screen, (size) => resizeDisplay(activeSession, size));
-    await transferDesktop(activeSession);
-    spawnDesktop(activeSession);
-    await waitForGraphicsReady();
+    observeDisplaySize(resizeDisplay);
+    await transferDesktop();
+    spawnDesktop();
+    startTaskTerminal({
+      id: 'task-firefox-install',
+      title: 'Installing Firefox',
+      command: firefoxInstallCommand,
+    });
+    launchFirefox();
     await loadScript(appWindow.document, NOVNC_SCRIPT_URL);
     if (!appWindow.RFB) throw new Error('noVNC RFB global did not load');
 
@@ -653,53 +609,67 @@ echo "COD_STAGE display-resized $MODE"
     if (canvas instanceof HTMLCanvasElement) canvas.focus({ preventScroll: true });
   };
 
-  const focusTerminalWindow = (id: string) => {
+  const focusTerminalApp = () => {
     const terminal = appWindow.document.querySelector<HTMLElement>(
-      `[data-terminal-window-id="${id}"]`,
+      '[data-terminal-app]',
     );
     terminal?.focus({ preventScroll: true });
   };
 
-  const loadingApps = (): LoadingApp[] => {
-    const apps: LoadingApp[] = [];
-    const firefoxTask = terminals.find((terminal) => terminal.id === 'task-firefox-install');
-    if (firefoxTask?.running) {
-      apps.push({ id: 'firefox', title: firefoxTask.title, terminalId: firefoxTask.id });
-    }
-    return apps;
+  const shellsCount = () => terminals.filter((terminal) => terminal.kind === 'terminal').length;
+
+  const launchFirefox = () => {
+    startTaskTerminal({
+      id: `task-firefox-launch-${Date.now()}`,
+      title: 'Launching Firefox',
+      command: `set -euo pipefail
+BROWSER="$HOME/.local/firefox/firefox"
+for _ in $(seq 1 1200); do
+  if [ -x "$BROWSER" ] && xdpyinfo -display :99 >/dev/null 2>&1 && xprop -root _NET_SUPPORTING_WM_CHECK >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.5
+done
+[ -x "$BROWSER" ]
+xdpyinfo -display :99 >/dev/null
+xprop -root _NET_SUPPORTING_WM_CHECK >/dev/null
+"$BROWSER" about:blank`,
+    });
   };
 
-  const launchFirefox = (event?: MouseEvent) => {
-    if (!session) return;
-    if (firefoxStatus !== 'ready') return;
+  const launchTerminal = () => {
 
-    const id = event?.ctrlKey
-      ? `firefox-${Date.now()}`
-      : 'firefox-launcher';
-    const command = firefoxLaunchCommand || 'cod-firefox';
-    session.spawnCommand(id, `${command} about:blank >/tmp/cod-firefox-launch.log 2>&1 &`, {
+    const id = `terminal-${Date.now()}`;
+    terminals = [
+      ...terminals,
+      {
+        id,
+        title: `Bash ${shellsCount() + 1}`,
+        kind: 'terminal',
+        running: true,
+        started: true,
+        failed: false,
+        collapsed: false,
+        lines: [],
+      },
+    ];
+    activeTerminalTab = id;
+    openTerminalApp(id);
+
+    session.spawnCommand(id, 'exec bash -l', {
+      type: 'echopty',
+      args: ['-l'],
       untracked: true,
     });
-  };
-
-  const launchTerminal = (event?: MouseEvent) => {
-    if (!session || !desktopReady) return;
-
-    const id = event?.ctrlKey
-      ? `terminal-launcher-${Date.now()}`
-      : 'terminal-launcher';
-    startTaskTerminal({
-      id,
-      title: 'Opening Terminal',
-      command: launchTerminalCommand,
-    });
-    appWindow.setTimeout(focusVncScreen);
   };
 
   const focusRemoteWindow = (window: RemoteWindow) => {
     if (session) {
       const windowId = JSON.stringify(window.id);
-      session.spawnCommand(`focus-${Date.now()}`, `python -B - <<'PY'
+      startTaskTerminal({
+        id: `task-focus-${Date.now()}`,
+        title: `Focus ${window.title}`,
+        command: `python -B - <<'PY'
 import ctypes
 import time
 
@@ -758,8 +728,7 @@ try:
     x11.XFlush(display)
 finally:
     x11.XCloseDisplay(display)
-PY`, {
-        untracked: true,
+PY`,
       });
     }
     appWindow.setTimeout(focusVncScreen);
@@ -788,6 +757,7 @@ PY`, {
             ...terminal,
             running: false,
             failed,
+            collapsed: true,
             lines: [
               ...terminal.lines,
               { stream: 'system' as const, text },
@@ -801,12 +771,19 @@ PY`, {
     id,
     title,
     command,
+    args,
+    env,
+    type,
+    track = true,
     onSuccess,
     onFailure,
   }: TaskTerminalOptions) => {
-    if (!session || terminals.some((terminal) => terminal.id === id)) return;
+    if (terminals.some((terminal) => terminal.id === id)) {
+      throw new Error(`cannot start ${id}: terminal already exists`);
+    }
     const marker = `COD_TASK_EXIT ${id} `;
     const wrappedCommand = `set +e\n(\n${command}\n)\ncode=$?\necho "${marker}$code"\nexit 0`;
+    const spawnCommand = track ? wrappedCommand : command;
 
     terminals = [
       ...terminals,
@@ -817,21 +794,33 @@ PY`, {
         running: true,
         started: true,
         failed: false,
-        lines: [{ stream: 'system', text: `${title}\n` }],
+        collapsed: true,
+        lines: [],
       },
     ];
-    openLogId = id;
 
-    session.spawnCommand(id, wrappedCommand, {
-      type: 'echopty',
-      args: ['-lc', wrappedCommand],
-      resolveOnOutput: (text) => text.includes(`${marker}0`),
-      rejectOnOutput: (text) => {
-        const match = text.match(new RegExp(`${marker}(\\d+)`));
-        if (!match || match[1] === '0') return undefined;
-        return new Error(`${title} exited with code ${match[1]}`);
-      },
-    })
+    let result: Promise<void> | undefined;
+    try {
+      result = session.spawnCommand(id, spawnCommand, {
+        type: type ?? 'echopty',
+        args: args ?? ['-lc', spawnCommand],
+        env,
+        untracked: !track,
+        resolveOnOutput: (text) => text.includes(`${marker}0`),
+        rejectOnOutput: (text) => {
+          const match = text.match(new RegExp(`${marker}(\\d+)`));
+          if (!match || match[1] === '0') return undefined;
+          return new Error(`${title} exited with code ${match[1]}`);
+        },
+      });
+    } catch (error) {
+      const spawnError = error instanceof Error ? error : new Error(String(error));
+      markTerminalFinished(id, true, `\nTask failed to start: ${spawnError.message}\n`);
+      onFailure?.(spawnError);
+      return;
+    }
+
+    result
       ?.then(() => {
         markTerminalFinished(id, false, '\nTask completed successfully.\n');
         onSuccess?.();
@@ -842,83 +831,46 @@ PY`, {
       });
   };
 
-  const startFirefoxInstall = () => {
-    if (!desktopReady || !session || firefoxInstallStarted) return;
-    firefoxInstallStarted = true;
-    firefoxStatus = 'installing';
-    startTaskTerminal({
-      id: 'task-firefox-install',
-      title: 'Installing Firefox',
-      command: firefoxInstallCommand,
-      onSuccess: () => {
-        firefoxStatus = 'ready';
-        if (!firefoxLaunchCommand) firefoxLaunchCommand = 'cod-firefox';
-      },
-      onFailure: () => {
-        firefoxStatus = 'error';
-      },
-    });
+  const selectTerminalTab = (id: string) => {
+    activeTerminalTab = id;
+    openTerminalApp(id);
   };
 
-  const closeTerminal = (id: string) => {
-    openLogId = openLogId === id ? undefined : openLogId;
-  };
-
-  const sendTerminalInput = (id: string, input: string) => {
-    session?.input(id, input);
+  const toggleTask = (id: string) => {
     terminals = terminals.map((terminal) =>
       terminal.id === id
         ? {
             ...terminal,
-            lines: [...terminal.lines, { stream: 'input' as const, text: input }].slice(-500),
+            collapsed: !terminal.collapsed,
           }
         : terminal,
     );
   };
 
-  const firefoxTitle = () => {
-    if (firefoxStatus === 'installing') return 'Installing Firefox';
-    if (firefoxStatus === 'error') return 'Firefox failed to install';
-    return 'Open Firefox';
+  const sendTerminalInput = (id: string, input: string) => {
+    session?.input(id, input);
   };
 
-  $effect(() => {
-    openLogId;
-    terminals.map((terminal) => `${terminal.id}:${terminal.lines.length}`).join(',');
-    appWindow.setTimeout(() => {
-      if (!openLogId) return;
-      applyTerminalHighlights(appWindow, terminals, openLogId);
-    });
-  });
 </script>
 
 <div class="screen" {@attach attachVnc}></div>
 
-{#each terminals as terminal (terminal.id)}
-  <TerminalWindow
-    {terminal}
-    open={openLogId === terminal.id}
-    onOpen={openLog}
-    onClose={closeTerminal}
-    onInput={sendTerminalInput}
-  />
-{/each}
+<TerminalWindow
+  {terminals}
+  open={terminalOpen}
+  activeTab={activeTerminalTab}
+  onClose={closeTerminalApp}
+  onSelectTab={selectTerminalTab}
+  onToggleTask={toggleTask}
+  onNewTerminal={launchTerminal}
+  onInput={sendTerminalInput}
+/>
 
 <div class:force-expand={loading} class="bar-anchor">
   <nav class="bar" aria-label="Open windows">
-    {#each loadingApps() as app (app.id)}
-      <button
-        class="app-entry loading"
-        type="button"
-        title={app.title}
-        onclick={() => openLog(app.terminalId)}
-      >
-        <img src={cod} alt="Cod loading" />
-      </button>
-    {/each}
     {#each remoteWindows as window (window.id)}
       <button
-        class="app-entry alive"
+        class="app-entry alive m3-layer"
         type="button"
         title={window.title}
         onclick={() => focusRemoteWindow(window)}
@@ -926,39 +878,24 @@ PY`, {
         <span>{window.title}</span>
       </button>
     {/each}
-    {#if remoteWindows.length === 0 && firefoxStatus !== 'installing'}
+    {#if hasSeenRemoteWindow && remoteWindows.length === 0}
       <button
-        class="app-entry"
-        class:error={firefoxStatus === 'error'}
-        aria-disabled={firefoxStatus === 'error'}
+        class="app-entry m3-layer"
         type="button"
-        title={firefoxTitle()}
         onclick={launchFirefox}
       >
         <span>Launch Firefox</span>
       </button>
     {/if}
-    {#each terminals.filter((terminal) => terminal.kind === 'task') as terminal (terminal.id)}
-      <button
-        class="app-entry alive"
-        class:error={terminal.failed}
-        type="button"
-        title={terminal.title}
-        onclick={() => openLog(terminal.id)}
-      >
-        <span>{terminal.title}</span>
-      </button>
-    {/each}
-    {#if !loading}
-      <button
-        class="app-entry"
-        type="button"
-        title="Open Terminal"
-        onclick={launchTerminal}
-      >
-        <span>Terminal</span>
-      </button>
-    {/if}
+    <button
+      class="app-entry m3-layer"
+      class:alive={terminalOpen || terminals.length > 0}
+      type="button"
+      title="Terminal"
+      onclick={() => openTerminalApp()}
+    >
+      <span>Terminal</span>
+    </button>
   </nav>
 </div>
 
@@ -987,7 +924,7 @@ PY`, {
 
   .bar {
     position: fixed;
-    z-index: 70;
+    z-index: 100;
     bottom: 0;
     left: 50%;
     display: flex;
@@ -1008,13 +945,12 @@ PY`, {
 
     &::after {
       position: absolute;
-      top: auto;
-      bottom: 0.18rem;
+      bottom: 0.1875rem;
       left: 50%;
-      width: 2.7rem;
-      height: 0.28rem;
+      width: 2.75rem;
+      height: 0.25rem;
       border-radius: 999px;
-      background: color-mix(in srgb, var(--m3c-primary-container) 70%, transparent);
+      background: var(--m3c-primary-container);
       content: '';
       translate: -50% 0;
       transition:
@@ -1050,9 +986,9 @@ PY`, {
     max-width: 10rem;
     height: 1.75rem;
     border: 0;
-    border-radius: 0.48rem;
-    padding: 0 0.6rem;
-    background: color-mix(in srgb, var(--m3c-surface-container-low) 82%, transparent);
+    border-radius: 0.5rem;
+    padding: 0 0.625rem;
+    background: var(--m3c-surface-container-low);
     color: var(--m3c-on-surface);
     text-align: center;
     cursor: pointer;
@@ -1070,34 +1006,18 @@ PY`, {
       position: absolute;
       bottom: 0.2rem;
       left: 50%;
-      width: 0.3rem;
-      height: 0.3rem;
+      width: 0.25rem;
+      height: 0.25rem;
       border-radius: 999px;
       background: currentColor;
       content: '';
-      opacity: 0.72;
+      opacity: 0.75;
       translate: -50% 0;
     }
 
     &.error {
       background: var(--m3c-error-container-subtle);
       color: var(--m3c-on-error-container-subtle);
-    }
-
-    &.loading {
-      min-width: 2.4rem;
-      background: transparent;
-      cursor: default;
-
-      &:hover {
-        background: transparent;
-      }
-    }
-
-    img {
-      width: 1.5rem;
-      height: 1.5rem;
-      object-fit: contain;
     }
 
     span {
@@ -1111,13 +1031,13 @@ PY`, {
 
   .loader {
     position: absolute;
-    z-index: 90;
+    z-index: 60;
     inset: 0;
     display: grid;
     place-items: center;
     align-content: center;
     gap: 1rem;
-    background: var(--m3c-surface);
+    background: var(--m3c-surface-container-lowest);
     transition: opacity 140ms;
 
     &.hidden {

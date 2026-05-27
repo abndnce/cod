@@ -5,12 +5,12 @@
 >
   <style>
     .codehs-logo {
-      animation: codehs-logo 2.4s ease-in-out forwards;
+      animation: codehs-logo 3.6s ease-in-out forwards;
       transform-origin: 8px 8px;
     }
 
     .cod-logo {
-      animation: cod-logo 2.4s cubic-bezier(.2, .8, .2, 1) forwards;
+      animation: cod-logo 3.6s cubic-bezier(.2, .8, .2, 1) forwards;
       opacity: 0;
       transform: scale(.38);
       transform-box: fill-box;
@@ -22,11 +22,11 @@
       font-size: 7px;
       font-weight: 700;
       letter-spacing: 0;
-      animation: text 2.4s ease-in-out forwards;
+      animation: text 3.6s ease-in-out forwards;
     }
 
     .removed-text {
-      animation: removed-text 2.4s ease-in-out forwards;
+      animation: removed-text 3.6s ease-in-out forwards;
     }
 
     @keyframes codehs-logo {
