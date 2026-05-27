@@ -3,11 +3,19 @@ type SpawnOutputStream = 'stdout' | 'stderr';
 type SpawnOutputHandler = (
   stream: SpawnOutputStream,
   data: unknown,
+  id?: string,
 ) => void;
 
 type SpawnEventData = {
   id?: string;
   data?: unknown;
+};
+
+type SpawnExitData = {
+  code?: number | null;
+  exitCode?: number | null;
+  status?: number | null;
+  signal?: string | null;
 };
 
 type CodeHsSpawnRequest = {
@@ -25,10 +33,12 @@ type RunningSpawn = {
   resolve: () => void;
   reject: (error: Error) => void;
   resolveOnOutput: (text: string) => boolean;
+  rejectOnOutput: (text: string) => Error | undefined;
 };
 
 type SpawnTrackingOptions = {
   resolveOnOutput?: (text: string) => boolean;
+  rejectOnOutput?: (text: string) => Error | undefined;
 };
 
 type SpawnCommandOptions = SpawnTrackingOptions & {
@@ -60,6 +70,7 @@ const createSpawnTracker = (onOutput: SpawnOutputHandler) => {
           resolve,
           reject,
           resolveOnOutput: options.resolveOnOutput ?? (() => false),
+          rejectOnOutput: options.rejectOnOutput ?? (() => undefined),
         });
       });
     },
@@ -68,13 +79,20 @@ const createSpawnTracker = (onOutput: SpawnOutputHandler) => {
       const runningSpawn = eventId ? runningSpawns.get(eventId) : undefined;
 
       if (!runningSpawn) {
-        onOutput(stream, data);
+        onOutput(stream, data?.data ?? data, eventId);
         return;
       }
 
       const text = String(data?.data ?? '');
       runningSpawn.output += text;
-      onOutput(stream, text);
+      onOutput(stream, text, eventId);
+
+      const error = runningSpawn.rejectOnOutput(text);
+      if (error) {
+        runningSpawns.delete(eventId!);
+        runningSpawn.reject(error);
+        return;
+      }
 
       if (runningSpawn.resolveOnOutput(text)) {
         runningSpawns.delete(eventId!);
@@ -87,18 +105,20 @@ const createSpawnTracker = (onOutput: SpawnOutputHandler) => {
       if (!eventId || !runningSpawn) return;
 
       runningSpawns.delete(eventId);
-      const exitData = data?.data as
-        | { code?: number | null; signal?: string | null }
-        | undefined;
+      const exitData = data?.data as SpawnExitData | number | null | undefined;
+      const code = typeof exitData === 'number'
+        ? exitData
+        : exitData?.code ?? exitData?.exitCode ?? exitData?.status;
+      const signal = typeof exitData === 'number' ? null : exitData?.signal;
 
-      if ((exitData?.code ?? 0) === 0 && !exitData?.signal) {
+      if (code === 0 && !signal) {
         runningSpawn.resolve();
         return;
       }
 
       runningSpawn.reject(
         new Error(
-          `${eventId} exited with code ${exitData?.code ?? 'null'} signal ${exitData?.signal ?? 'null'}: ${runningSpawn.output}`,
+          `${eventId} exited with code ${code ?? 'unknown'} signal ${signal ?? 'null'}: ${runningSpawn.output}`,
         ),
       );
     },
@@ -114,6 +134,7 @@ const connectCodeHsSocket = (
     `wss://scalinghub.codehs.com/user/${uid}/spawn/?watch=true&EIO=3&transport=websocket`,
   );
   let open = false;
+  let keepaliveSize = { width: 1100, height: 800 };
   let resolveReady: () => void;
   const ready = new Promise<void>((resolve) => {
     resolveReady = resolve;
@@ -174,6 +195,19 @@ const connectCodeHsSocket = (
     spawn(request: CodeHsSpawnRequest) {
       sendEvent('spawn', request);
     },
+    kill(id: string) {
+      sendEvent('kill', { id });
+    },
+    input(id: string, data: string) {
+      sendEvent('stdin', { id, data });
+    },
+    resize(width: number, height: number) {
+      keepaliveSize = {
+        width: Math.max(1, Math.round(width)),
+        height: Math.max(1, Math.round(height)),
+      };
+      sendEvent('resize', { w: keepaliveSize.width, h: keepaliveSize.height });
+    },
     transfer(files: Record<string, string>) {
       sendEvent('transfer', files);
     },
@@ -219,6 +253,15 @@ export const createSession = (
   return {
     ready: socket.ready,
     spawnCommand,
+    kill(id: string) {
+      socket.kill(id);
+    },
+    input(id: string, data: string) {
+      socket.input(id, data);
+    },
+    resize(width: number, height: number) {
+      socket.resize(width, height);
+    },
     transfer(files: Record<string, string>) {
       const result = new Promise<void>((resolve) => {
         transferResolvers.push(resolve);
