@@ -568,6 +568,10 @@ xrandr -d :99 --output screen --mode "$MODE" >/dev/null
 
   const startVnc = async (screen: HTMLElement) => {
     const url = `wss://scalinghub.codehs.com/user/${uid}/graphics`;
+    let resolveDesktopWindowsReady: () => void;
+    const desktopWindowsReady = new Promise<void>((resolve) => {
+      resolveDesktopWindowsReady = resolve;
+    });
 
     observeCanvasLogicalSize(screen);
 
@@ -578,6 +582,9 @@ xrandr -d :99 --output screen --mode "$MODE" >/dev/null
       }
 
       if (stream === 'stderr') console.warn('[spawn]', text);
+      if (text.split('\n').some((line) => line.trim() === 'COD_WINDOWS []')) {
+        resolveDesktopWindowsReady();
+      }
       handleRemoteOutput(text);
     });
 
@@ -593,6 +600,7 @@ xrandr -d :99 --output screen --mode "$MODE" >/dev/null
     await loadScript(appWindow.document, NOVNC_SCRIPT_URL);
     if (!appWindow.RFB) throw new Error('noVNC RFB global did not load');
 
+    await desktopWindowsReady;
     connectRfb(screen, url, () => {
       loading = false;
       syncCanvasLogicalSize(screen);

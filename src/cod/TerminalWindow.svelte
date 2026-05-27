@@ -132,7 +132,7 @@
   {#if activeTab === 'tasks'}
     <div class="task-list">
       {#if tasks().length === 0}
-        <p class="empty">$ no tasks have started yet</p>
+        <p class="empty">No tasks have started yet</p>
       {/if}
       {#each tasks() as terminal (terminal.id)}
         <article
@@ -149,7 +149,7 @@
             <span class="task-chevron" aria-hidden="true"
               >[{terminal.collapsed ? '+' : '-'}]</span
             >
-            <strong>
+            <span class="task-label">
               <span class="task-title">{terminal.title}</span>
               {#if terminal.running}
                 <img
@@ -159,7 +159,7 @@
                   alt="running"
                 />
               {/if}
-            </strong>
+            </span>
           </button>
           {#if !terminal.collapsed}
             {@const rendered = renderedTerminal(terminal)}
