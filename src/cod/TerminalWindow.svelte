@@ -175,7 +175,6 @@
   {:else if activeTerminal()}
     {@const rendered = renderedTerminal(activeTerminal()!)}
     <AnsiText
-      class="interactive"
       id={activeTab}
       text={rendered.text}
       ranges={rendered.ranges}

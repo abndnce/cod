@@ -8,7 +8,6 @@
   };
 
   type Props = {
-    class?: string;
     id?: string;
     ranges: AnsiRange[];
     text: string;
@@ -38,7 +37,7 @@
     return parts;
   };
 
-  let { class: className, id, ranges, text }: Props = $props();
+  let { id, ranges, text }: Props = $props();
   let element = $state<HTMLPreElement>();
   const parts = $derived(getParts(text, ranges));
 
@@ -52,4 +51,4 @@
   });
 </script>
 
-<pre class={className} data-terminal-id={id} bind:this={element}>{#each parts as part}<span class={part.className}>{part.text}</span>{/each}</pre>
+<pre data-terminal-id={id} bind:this={element}>{#each parts as part}<span class={part.className}>{part.text}</span>{/each}</pre>

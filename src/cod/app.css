@@ -281,6 +281,7 @@ html:not(.js) :active.m3-layer::after {
 }
 
 .terminal-app pre {
+  min-height: 0;
   overflow: auto;
   padding: 1ch;
   background: var(--m3c-surface-container-lowest);
@@ -288,10 +289,6 @@ html:not(.js) :active.m3-layer::after {
   font: 0.875rem/1.5 var(--cod-font);
   white-space: pre-wrap;
   user-select: text;
-}
-
-.terminal-app pre.interactive {
-  min-height: 0;
 }
 
 .empty {
