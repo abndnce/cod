@@ -22,6 +22,7 @@ await import("https://esm.sh/gadidae")
 > While we install the latest versions of:
 > - `firefox`
 > - `prismlauncher`
+>
 > These tools you may want to use inside the terminal use CodeHS's default versions:
 > - `node` (12.22.9)
 > - `npm` (8.5.1)
