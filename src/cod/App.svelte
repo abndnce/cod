@@ -49,7 +49,7 @@ mkdir -p "$BIN_DIR" "$APP_DIR"
 BROWSER="$APP_DIR/firefox/firefox"
 
 if [ ! -x "$BROWSER" ]; then
-  ARCHIVE="/tmp/codehs-firefox.tar.xz"
+  ARCHIVE="/tmp/firefox.tar.xz"
   EXTRACT_DIR="$(mktemp -d "$APP_DIR/firefox-install.XXXXXX")"
   URL="https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64&lang=en-US"
   cleanup() {
@@ -69,7 +69,7 @@ with urllib.request.urlopen(url) as response:
     content_type = response.headers.get('content-type', '')
     if response.status != 200:
         raise RuntimeError(f'unexpected Firefox response: {response.status} {content_type}')
-    with open('/tmp/codehs-firefox.tar.xz', 'wb') as f:
+    with open('/tmp/firefox.tar.xz', 'wb') as f:
         f.write(response.read())
 PY
   fi
@@ -81,6 +81,105 @@ fi
 
 "$BROWSER" --version
 echo "Firefox is ready: $BROWSER"
+`;
+  const prismInstallCommand = String.raw`set -euo pipefail
+echo "Installing Prism Launcher..."
+python3 - <<'PY'
+import json
+import os
+import shutil
+import subprocess
+import tarfile
+import urllib.request
+
+release_api = 'https://api.github.com/repos/PrismLauncher/PrismLauncher/releases/latest'
+fallback_url = 'https://github.com/PrismLauncher/PrismLauncher/releases/download/11.0.2/PrismLauncher-Linux-Qt6-Portable-11.0.2.tar.gz'
+home = os.environ.get('HOME') or '/tmp'
+app_root = os.path.join(home, '.local', 'prism')
+bin_dir = os.path.join(home, '.local', 'bin')
+extract_dir = os.path.join(app_root, 'portable')
+launcher = os.path.join(bin_dir, 'prismlauncher')
+os.makedirs(app_root, exist_ok=True)
+os.makedirs(bin_dir, exist_ok=True)
+
+def download(url, dest, timeout=240):
+    curl = shutil.which('curl')
+    wget = shutil.which('wget')
+    if curl:
+        return subprocess.run([curl, '-L', '--fail', '--max-time', str(timeout), '-o', dest, url]).returncode == 0
+    if wget:
+        return subprocess.run([wget, '-O', dest, url], timeout=timeout + 30).returncode == 0
+    req = urllib.request.Request(url, headers={'User-Agent': 'prism-bootstrap/1'})
+    with urllib.request.urlopen(req, timeout=timeout) as resp, open(dest, 'wb') as f:
+        shutil.copyfileobj(resp, f)
+    return True
+
+def latest_url():
+    override = os.environ.get('PRISM_URL')
+    if override:
+        return override
+    try:
+        req = urllib.request.Request(release_api, headers={'User-Agent': 'prism-bootstrap/1'})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            release = json.load(resp)
+        assets = release.get('assets') or []
+        for asset in assets:
+            name = asset.get('name') or ''
+            if name.startswith('PrismLauncher-Linux-Qt6-Portable-') and name.endswith('.tar.gz'):
+                print('Prism release:', release.get('tag_name'), name, flush=True)
+                return asset.get('browser_download_url')
+        for asset in assets:
+            name = asset.get('name') or ''
+            if name == 'PrismLauncher-Linux-x86_64.AppImage':
+                print('Prism AppImage fallback:', release.get('tag_name'), name, flush=True)
+                return asset.get('browser_download_url')
+    except Exception as exc:
+        print('Could not look up latest Prism release:', type(exc).__name__, str(exc), flush=True)
+    return fallback_url
+
+def find_prism(root):
+    names = {'prismlauncher', 'PrismLauncher', 'prismlauncher.bin'}
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            if name in names:
+                path = os.path.join(dirpath, name)
+                os.chmod(path, os.stat(path).st_mode | 0o111)
+                return path
+    return None
+
+url = latest_url()
+archive = os.path.join(app_root, os.path.basename(url.split('?', 1)[0]) or 'prism.tar.gz')
+if not os.path.exists(archive) or os.path.getsize(archive) < 1024 * 1024:
+    print('Downloading Prism from', url, flush=True)
+    tmp = archive + '.download'
+    if os.path.exists(tmp):
+        os.remove(tmp)
+    if not download(url, tmp):
+        raise RuntimeError('failed to download Prism')
+    os.replace(tmp, archive)
+
+print('Prism archive:', archive, os.path.getsize(archive), flush=True)
+shutil.rmtree(extract_dir, ignore_errors=True)
+os.makedirs(extract_dir, exist_ok=True)
+if archive.endswith('.AppImage'):
+    os.chmod(archive, os.stat(archive).st_mode | 0o111)
+    result = subprocess.run([archive, '--appimage-extract'], cwd=extract_dir)
+    if result.returncode != 0:
+        raise RuntimeError('failed to extract Prism AppImage')
+else:
+    with tarfile.open(archive, 'r:gz') as tar:
+        tar.extractall(extract_dir)
+
+prism = find_prism(extract_dir)
+if not prism:
+    raise RuntimeError('could not find Prism executable after extraction')
+
+with open(launcher, 'w') as f:
+    f.write('#!/bin/sh\nexec "{}" "$@"\n'.format(prism))
+os.chmod(launcher, 0o755)
+subprocess.run([launcher, '--version'], timeout=30, check=True)
+print('Prism is ready:', launcher, flush=True)
+PY
 `;
   const remoteProgram = String.raw`import json
 import os
@@ -229,24 +328,43 @@ def write_jwmrc(path):
                 <Class>firefox</Class>
                 <Class>Firefox</Class>
                 <Option>maximized</Option>
+                <Option>noborder</Option>
+                <Option>notitle</Option>
+              </Group>
+              <Group>
+                <Name>PrismLauncher</Name>
+                <Class>PrismLauncher</Class>
+                <Class>prismlauncher</Class>
+                <Option>maximized</Option>
               </Group>
               <Group>
                 <Option>tiled</Option>
                 <Option>aerosnap</Option>
-                <Option>noborder</Option>
-                <Option>notitle</Option>
               </Group>
               <WindowStyle decorations="motif">
                 <Font>Sans-10</Font>
-                <Width>0</Width>
-                <Height>0</Height>
+                <Width>1</Width>
+                <Height>20</Height>
+                <Corner>0</Corner>
+                <Foreground>#81b69f</Foreground>
+                <Background>#001e14</Background>
+                <Outline>#001e14</Outline>
+                <Active>
+                  <Foreground>#daffec</Foreground>
+                  <Background>#002c1f</Background>
+                  <Outline>#002c1f</Outline>
+                </Active>
               </WindowStyle>
+              <TitleButtonOrder>tx</TitleButtonOrder>
               <Tray autohide="true" x="0" y="-1" height="1"></Tray>
               <FocusModel>click</FocusModel>
               <MoveMode>opaque</MoveMode>
               <ResizeMode>opaque</ResizeMode>
               <DoubleClickSpeed>400</DoubleClickSpeed>
               <DoubleClickDelta>2</DoubleClickDelta>
+              <Mouse context="title" button="1">move</Mouse>
+              <Mouse context="title" button="11">maximize</Mouse>
+              <Mouse context="close" button="1">close</Mouse>
               <Key key="A-Tab">nextstacked</Key>
               <Key key="A-F4">close</Key>
             </JWM>
@@ -327,7 +445,8 @@ while True:
   let activeTerminalTab = $state('tasks');
   let terminals = $state<TerminalWindowModel[]>([]);
   let remoteWindows = $state<RemoteWindow[]>([]);
-  let hasSeenRemoteWindow = $state(false);
+  let firefoxInstalled = $state(false);
+  let prismInstalled = $state(false);
   let vncScreen: HTMLElement | undefined;
 
   const openTerminalApp = (tab = activeTerminalTab) => {
@@ -519,7 +638,6 @@ xrandr -d :99 --output screen --mode "$MODE" >/dev/null
       const windows = (JSON.parse(json) as RemoteWindow[]).filter(
         (window) => typeof window.id === 'string' && typeof window.title === 'string',
       );
-      if (windows.length > 0) hasSeenRemoteWindow = true;
       const windowsById = new Map(windows.map((window) => [window.id, window]));
       const orderedWindows = remoteWindows
         .map((window) => windowsById.get(window.id))
@@ -595,8 +713,19 @@ xrandr -d :99 --output screen --mode "$MODE" >/dev/null
       id: 'task-firefox-install',
       title: 'Installing Firefox',
       command: firefoxInstallCommand,
+      onSuccess: () => {
+        firefoxInstalled = true;
+        launchFirefox();
+      },
     });
-    launchFirefox();
+    startTaskTerminal({
+      id: 'task-prism-install',
+      title: 'Installing Prism Launcher',
+      command: prismInstallCommand,
+      onSuccess: () => {
+        prismInstalled = true;
+      },
+    });
     await loadScript(appWindow.document, NOVNC_SCRIPT_URL);
     if (!appWindow.RFB) throw new Error('noVNC RFB global did not load');
 
@@ -626,14 +755,18 @@ xrandr -d :99 --output screen --mode "$MODE" >/dev/null
 
   const shellsCount = () => terminals.filter((terminal) => terminal.kind === 'terminal').length;
 
+  const hasRemoteWindowNamed = (name: string) =>
+    remoteWindows.some((window) => window.title.toLowerCase().includes(name));
+
   const launchFirefox = () => {
+    if (!firefoxInstalled) return;
     startTaskTerminal({
       id: `task-firefox-launch-${Date.now()}`,
       title: 'Launching Firefox',
       command: `set -euo pipefail
 BROWSER="$HOME/.local/firefox/firefox"
 for _ in $(seq 1 1200); do
-  if [ -x "$BROWSER" ] && xdpyinfo -display :99 >/dev/null 2>&1 && xprop -root _NET_SUPPORTING_WM_CHECK >/dev/null 2>&1; then
+  if xdpyinfo -display :99 >/dev/null 2>&1 && xprop -root _NET_SUPPORTING_WM_CHECK >/dev/null 2>&1; then
     break
   fi
   sleep 0.5
@@ -642,6 +775,38 @@ done
 xdpyinfo -display :99 >/dev/null
 xprop -root _NET_SUPPORTING_WM_CHECK >/dev/null
 "$BROWSER" about:blank`,
+    });
+  };
+
+  const launchPrism = () => {
+    if (!prismInstalled) return;
+    startTaskTerminal({
+      id: `task-prism-launch-${Date.now()}`,
+      title: 'Launching Prism Launcher',
+      command: `set -euo pipefail
+PRISM="$HOME/.local/bin/prismlauncher"
+RUNTIME="$HOME/.local/run"
+mkdir -p "$RUNTIME"
+chmod 700 "$RUNTIME"
+export DISPLAY=:99
+export XDG_RUNTIME_DIR="$RUNTIME"
+export NO_AT_BRIDGE=1
+export GTK_A11Y=none
+export GTK_MODULES=
+export QT_XCB_GL_INTEGRATION="\${QT_XCB_GL_INTEGRATION:-none}"
+export QT_LOGGING_RULES="\${QT_LOGGING_RULES:-qt.qpa.*=true}"
+export LIBGL_ALWAYS_SOFTWARE="\${LIBGL_ALWAYS_SOFTWARE:-1}"
+export MESA_LOADER_DRIVER_OVERRIDE="\${MESA_LOADER_DRIVER_OVERRIDE:-llvmpipe}"
+for _ in $(seq 1 1200); do
+  if xdpyinfo -display :99 >/dev/null 2>&1 && xprop -root _NET_SUPPORTING_WM_CHECK >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.5
+done
+[ -x "$PRISM" ]
+xdpyinfo -display :99 >/dev/null
+xprop -root _NET_SUPPORTING_WM_CHECK >/dev/null
+"$PRISM" \${PRISM_ARGS:-}`,
     });
   };
 
@@ -886,13 +1051,22 @@ PY`,
         <span>{window.title}</span>
       </button>
     {/each}
-    {#if hasSeenRemoteWindow && remoteWindows.length === 0}
+    {#if firefoxInstalled && !hasRemoteWindowNamed('firefox')}
       <button
         class="app-entry m3-layer"
         type="button"
         onclick={launchFirefox}
       >
         <span>Launch Firefox</span>
+      </button>
+    {/if}
+    {#if prismInstalled && !hasRemoteWindowNamed('prism')}
+      <button
+        class="app-entry m3-layer"
+        type="button"
+        onclick={launchPrism}
+      >
+        <span>Launch Prism</span>
       </button>
     {/if}
     <button
@@ -1021,11 +1195,6 @@ PY`,
       content: '';
       opacity: 0.75;
       translate: -50% 0;
-    }
-
-    &.error {
-      background: var(--m3c-error-container-subtle);
-      color: var(--m3c-on-error-container-subtle);
     }
 
     span {
