@@ -45,8 +45,11 @@ echo "Installing Firefox..."
 export PATH="$HOME/.local/bin:$PATH"
 BIN_DIR="$HOME/.local/bin"
 APP_DIR="$HOME/.local"
-mkdir -p "$BIN_DIR" "$APP_DIR"
+APPLICATIONS_DIR="$HOME/.local/share/applications"
+mkdir -p "$BIN_DIR" "$APP_DIR" "$APPLICATIONS_DIR"
 BROWSER="$APP_DIR/firefox/firefox"
+FIREFOX_BIN="$APP_DIR/firefox/firefox-bin"
+DESKTOP_FILE="$APPLICATIONS_DIR/firefox.desktop"
 
 if [ ! -x "$BROWSER" ]; then
   ARCHIVE="/tmp/firefox.tar.xz"
@@ -78,6 +81,52 @@ PY
   rm -rf "$APP_DIR/firefox"
   mv "$EXTRACT_DIR/firefox" "$APP_DIR/firefox"
 fi
+
+ln -sfn "$BROWSER" "$BIN_DIR/firefox"
+cat > "$DESKTOP_FILE" <<EOF
+[Desktop Entry]
+Encoding=UTF-8
+Version=1.0
+Type=Application
+NoDisplay=true
+Exec=$FIREFOX_BIN %u
+Name=Firefox
+Comment=Custom definition for Firefox
+Icon=$APP_DIR/firefox/browser/chrome/icons/default/default128.png
+MimeType=x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/chrome;text/html;application/x-extension-htm;application/x-extension-html;application/x-extension-shtml;application/xhtml+xml;application/x-extension-xhtml;application/x-extension-xht;
+StartupWMClass=firefox
+EOF
+chmod 644 "$DESKTOP_FILE"
+mkdir -p "$HOME/.config"
+python3 - <<'PY'
+import configparser
+import os
+
+home = os.environ['HOME']
+path = os.path.join(home, '.config', 'mimeapps.list')
+defaults = {
+    'x-scheme-handler/http': 'firefox.desktop',
+    'x-scheme-handler/https': 'firefox.desktop',
+    'x-scheme-handler/chrome': 'firefox.desktop',
+    'text/html': 'firefox.desktop',
+    'application/x-extension-htm': 'firefox.desktop',
+    'application/x-extension-html': 'firefox.desktop',
+    'application/x-extension-shtml': 'firefox.desktop',
+    'application/xhtml+xml': 'firefox.desktop',
+    'application/x-extension-xhtml': 'firefox.desktop',
+    'application/x-extension-xht': 'firefox.desktop',
+}
+config = configparser.RawConfigParser(strict=False, delimiters=('='))
+config.optionxform = str
+config.read(path)
+for section, suffix in [('Default Applications', ''), ('Added Associations', ';')]:
+    if not config.has_section(section):
+        config.add_section(section)
+    for key, value in defaults.items():
+        config.set(section, key, value + suffix)
+with open(path, 'w') as f:
+    config.write(f, space_around_delimiters=False)
+PY
 
 "$BROWSER" --version
 echo "Firefox is ready: $BROWSER"
