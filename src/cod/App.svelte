@@ -26,6 +26,7 @@
     env?: Record<string, string | number>;
     type?: 'normal' | 'echopty';
     track?: boolean;
+    onOutput?: (stream: TerminalLine['stream'], text: string) => void;
     onSuccess?: () => void;
     onFailure?: (error: Error) => void;
   };
@@ -40,6 +41,7 @@
   const REMOTE_DISPLAY_MAX_WIDTH = 1920;
   const REMOTE_DISPLAY_MAX_HEIGHT = 1080;
   const REMOTE_WINDOWS = 'COD_WINDOWS ';
+  const RELATIVE_MOUSE_ID = 'task-relative-mouse';
   const firefoxInstallCommand = String.raw`set -euo pipefail
 echo "Installing Firefox..."
 export PATH="$HOME/.local/bin:$PATH"
@@ -229,6 +231,78 @@ os.chmod(launcher, 0o755)
 subprocess.run([launcher, '--version'], timeout=30, check=True)
 print('Prism is ready:', launcher, flush=True)
 PY
+`;
+  const relativeMouseCommand = String.raw`set -euo pipefail
+export DISPLAY=:99
+for _ in $(seq 1 1200); do
+  if xdpyinfo -display :99 >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.5
+done
+xdpyinfo -display :99 >/dev/null
+HELPER="$(mktemp /tmp/cod-relative-mouse.XXXXXX.py)"
+trap 'rm -f "$HELPER"' EXIT
+cat > "$HELPER" <<'PY'
+import ctypes
+import sys
+
+x11 = ctypes.cdll.LoadLibrary('libX11.so.6')
+xtst = ctypes.cdll.LoadLibrary('libXtst.so.6')
+
+XErrorHandler = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
+XIOErrorHandler = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p)
+
+@XErrorHandler
+def handle_x_error(display, event):
+    print('Relative mouse X error', flush=True)
+    return 0
+
+@XIOErrorHandler
+def handle_x_io_error(display):
+    print('Relative mouse X IO error', flush=True)
+    return 0
+
+x11.XOpenDisplay.restype = ctypes.c_void_p
+x11.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+x11.XSetErrorHandler.argtypes = [XErrorHandler]
+x11.XSetIOErrorHandler.argtypes = [XIOErrorHandler]
+xtst.XTestFakeRelativeMotionEvent.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_ulong]
+xtst.XTestFakeRelativeMotionEvent.restype = ctypes.c_int
+xtst.XTestFakeButtonEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
+xtst.XTestFakeButtonEvent.restype = ctypes.c_int
+
+x11.XSetErrorHandler(handle_x_error)
+x11.XSetIOErrorHandler(handle_x_io_error)
+display = x11.XOpenDisplay(None)
+if not display:
+    raise SystemExit('could not open DISPLAY')
+
+print('Relative mouse helper ready', flush=True)
+
+def clamp(value):
+    return max(-2000, min(2000, int(value)))
+
+for line in sys.stdin:
+    parts = line.split()
+    if not parts:
+        continue
+    try:
+        if parts[0] == 'm' and len(parts) == 3:
+            dx = clamp(parts[1])
+            dy = clamp(parts[2])
+            if dx or dy:
+                xtst.XTestFakeRelativeMotionEvent(display, dx, dy, 0, 0)
+                x11.XSync(display, 0)
+        elif parts[0] == 'b' and len(parts) == 3:
+            button = max(1, min(7, int(parts[1])))
+            down = 1 if int(parts[2]) else 0
+            xtst.XTestFakeButtonEvent(display, button, down, 0)
+            x11.XSync(display, 0)
+    except Exception as exc:
+        print('Relative mouse input error:', type(exc).__name__, exc, flush=True)
+PY
+exec python3 -u "$HELPER"
 `;
   const remoteProgram = String.raw`import json
 import os
@@ -496,7 +570,16 @@ while True:
   let remoteWindows = $state<RemoteWindow[]>([]);
   let firefoxInstalled = $state(false);
   let prismInstalled = $state(false);
+  let relativeMouseEnabled = $state(false);
+  let showRelativeMouseHint = $state(false);
+  let relativeMouseHintSeen = $state(false);
   let vncScreen: HTMLElement | undefined;
+  let relativeMouseReady = false;
+  let relativeMouseDx = 0;
+  let relativeMouseDy = 0;
+  let relativeMouseFlushTimer = 0;
+  let relativeMouseHintTimer = 0;
+  const taskOutputHandlers = new Map<string, NonNullable<TaskTerminalOptions['onOutput']>>();
 
   const openTerminalApp = (tab = activeTerminalTab) => {
     activeTerminalTab = tab;
@@ -590,6 +673,111 @@ while True:
     if (!observeCanvas()) {
       screenObserver.observe(screen, { childList: true, subtree: true });
     }
+  };
+
+  const flushRelativeMouse = () => {
+    relativeMouseFlushTimer = 0;
+    const dx = Math.round(relativeMouseDx);
+    const dy = Math.round(relativeMouseDy);
+    relativeMouseDx = 0;
+    relativeMouseDy = 0;
+    if (!relativeMouseReady) return;
+    if (!dx && !dy) return;
+    session.input(RELATIVE_MOUSE_ID, `m ${dx} ${dy}\n`);
+  };
+
+  const queueRelativeMouse = (dx: number, dy: number) => {
+    relativeMouseDx += dx;
+    relativeMouseDy += dy;
+    if (!relativeMouseFlushTimer) {
+      relativeMouseFlushTimer = appWindow.setTimeout(flushRelativeMouse, 8);
+    }
+  };
+
+  const remoteButtonForMouseEvent = (event: MouseEvent) => {
+    if (event.button === 0) return 1;
+    if (event.button === 1) return 2;
+    if (event.button === 2) return 3;
+    return undefined;
+  };
+
+  const isRelativeMouseCandidateWindow = (window: RemoteWindow) => {
+    const title = window.title.toLowerCase();
+    return title.includes('minecraft');
+  };
+
+  const showRelativeMouseToast = () => {
+    if (relativeMouseHintSeen || relativeMouseEnabled) return;
+    relativeMouseHintSeen = true;
+    showRelativeMouseHint = true;
+    if (relativeMouseHintTimer) appWindow.clearTimeout(relativeMouseHintTimer);
+    relativeMouseHintTimer = appWindow.setTimeout(() => {
+      relativeMouseHintTimer = 0;
+      showRelativeMouseHint = false;
+    }, 6500);
+  };
+
+  const attachRelativeMouse = (screen: HTMLElement) => {
+    const document = appWindow.document;
+
+    const hasPointerLock = () => document.pointerLockElement === screen;
+
+    const updatePointerLockState = () => {
+      if (!hasPointerLock() && relativeMouseFlushTimer) {
+        appWindow.clearTimeout(relativeMouseFlushTimer);
+        flushRelativeMouse();
+      }
+      relativeMouseEnabled = hasPointerLock();
+    };
+
+    const requestPointerLock = (event: MouseEvent) => {
+      if (!event.ctrlKey || event.button !== 0 || hasPointerLock()) return;
+      screen.requestPointerLock();
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+
+    const handleMouseMove = (event: MouseEvent) => {
+      if (!hasPointerLock()) return;
+      queueRelativeMouse(event.movementX, event.movementY);
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+
+    const handleMouseButton = (event: MouseEvent) => {
+      if (!hasPointerLock()) return;
+      const button = remoteButtonForMouseEvent(event);
+      if (button) session.input(RELATIVE_MOUSE_ID, `b ${button} ${event.type === 'mousedown' ? 1 : 0}\n`);
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+
+    const handleContextMenu = (event: MouseEvent) => {
+      if (!hasPointerLock()) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+
+    screen.addEventListener('mousedown', requestPointerLock, { capture: true });
+    document.addEventListener('mousemove', handleMouseMove, { capture: true });
+    document.addEventListener('pointermove', handleMouseMove, { capture: true });
+    document.addEventListener('mousedown', handleMouseButton, { capture: true });
+    document.addEventListener('mouseup', handleMouseButton, { capture: true });
+    document.addEventListener('contextmenu', handleContextMenu, { capture: true });
+    document.addEventListener('pointerlockchange', updatePointerLockState);
+
+    return () => {
+      screen.removeEventListener('mousedown', requestPointerLock, { capture: true });
+      document.removeEventListener('mousemove', handleMouseMove, { capture: true });
+      document.removeEventListener('pointermove', handleMouseMove, { capture: true });
+      document.removeEventListener('mousedown', handleMouseButton, { capture: true });
+      document.removeEventListener('mouseup', handleMouseButton, { capture: true });
+      document.removeEventListener('contextmenu', handleContextMenu, { capture: true });
+      document.removeEventListener('pointerlockchange', updatePointerLockState);
+      if (relativeMouseFlushTimer) appWindow.clearTimeout(relativeMouseFlushTimer);
+      relativeMouseFlushTimer = 0;
+      relativeMouseEnabled = false;
+    };
   };
 
   const connectRfb = (
@@ -699,14 +887,9 @@ xrandr -d :99 --output screen --mode "$MODE" >/dev/null
       }
 
       remoteWindows = orderedWindows;
+      if (orderedWindows.some(isRelativeMouseCandidateWindow)) showRelativeMouseToast();
     } catch (error) {
       console.warn('[wm] failed to parse windows', error, line);
-    }
-  };
-
-  const handleRemoteOutput = (text: string) => {
-    for (const line of text.split('\n')) {
-      if (line.startsWith(REMOTE_WINDOWS)) updateRemoteWindows(line);
     }
   };
 
@@ -716,7 +899,7 @@ xrandr -d :99 --output screen --mode "$MODE" >/dev/null
     });
   };
 
-  const spawnDesktop = () => {
+  const spawnDesktop = (onDesktopWindowsReady: () => void) => {
     const command = 'set -e\nsource "./.pyvenv311/bin/activate"\npython -B "$MAIN_FILE"';
 
     startTaskTerminal({
@@ -730,12 +913,33 @@ xrandr -d :99 --output screen --mode "$MODE" >/dev/null
         DEBUG_MODE: 0,
       },
       track: false,
+      onOutput: (_stream, text) => {
+        for (const line of text.split('\n')) {
+          if (line.startsWith(REMOTE_WINDOWS)) updateRemoteWindows(line);
+          if (line.trim() === 'COD_WINDOWS []') onDesktopWindowsReady();
+        }
+      },
+    });
+  };
+
+  const spawnRelativeMouse = () => {
+    relativeMouseReady = false;
+    startTaskTerminal({
+      id: RELATIVE_MOUSE_ID,
+      title: 'Relative mouse helper',
+      command: relativeMouseCommand,
+      args: ['-lc', relativeMouseCommand],
+      type: 'echopty',
+      track: false,
+      onOutput: (_stream, text) => {
+        if (text.includes('Relative mouse helper ready')) relativeMouseReady = true;
+      },
     });
   };
 
   const startVnc = async (screen: HTMLElement) => {
     const url = `wss://scalinghub.codehs.com/user/${uid}/graphics`;
-    let resolveDesktopWindowsReady: () => void;
+    let resolveDesktopWindowsReady: () => void = () => {};
     const desktopWindowsReady = new Promise<void>((resolve) => {
       resolveDesktopWindowsReady = resolve;
     });
@@ -748,16 +952,13 @@ xrandr -d :99 --output screen --mode "$MODE" >/dev/null
         appendTerminal(id, stream, text);
       }
 
+      if (id) taskOutputHandlers.get(id)?.(stream, text);
       if (stream === 'stderr') console.warn('[spawn]', text);
-      if (text.split('\n').some((line) => line.trim() === 'COD_WINDOWS []')) {
-        resolveDesktopWindowsReady();
-      }
-      handleRemoteOutput(text);
     });
 
     observeDisplaySize(resizeDisplay);
     await transferDesktop();
-    spawnDesktop();
+    spawnDesktop(resolveDesktopWindowsReady);
     startTaskTerminal({
       id: 'task-firefox-install',
       title: 'Installing Firefox',
@@ -779,6 +980,7 @@ xrandr -d :99 --output screen --mode "$MODE" >/dev/null
     if (!appWindow.RFB) throw new Error('noVNC RFB global did not load');
 
     await desktopWindowsReady;
+    spawnRelativeMouse();
     connectRfb(screen, url, () => {
       loading = false;
       syncCanvasLogicalSize(screen);
@@ -787,7 +989,16 @@ xrandr -d :99 --output screen --mode "$MODE" >/dev/null
 
   const attachVnc: Attachment<HTMLElement> = (screen) => {
     vncScreen = screen;
+    const detachRelativeMouse = attachRelativeMouse(screen);
     void startVnc(screen);
+
+    return () => {
+      detachRelativeMouse();
+      if (relativeMouseHintTimer) appWindow.clearTimeout(relativeMouseHintTimer);
+      relativeMouseHintTimer = 0;
+      showRelativeMouseHint = false;
+      vncScreen = undefined;
+    };
   };
 
   const focusVncScreen = () => {
@@ -997,6 +1208,7 @@ PY`,
     env,
     type,
     track = true,
+    onOutput,
     onSuccess,
     onFailure,
   }: TaskTerminalOptions) => {
@@ -1020,6 +1232,7 @@ PY`,
         lines: [],
       },
     ];
+    if (onOutput) taskOutputHandlers.set(id, onOutput);
 
     let result: Promise<void> | undefined;
     try {
@@ -1036,6 +1249,7 @@ PY`,
         },
       });
     } catch (error) {
+      taskOutputHandlers.delete(id);
       const spawnError = error instanceof Error ? error : new Error(String(error));
       markTerminalFinished(id, true, `\nTask failed to start: ${spawnError.message}\n`);
       onFailure?.(spawnError);
@@ -1044,10 +1258,12 @@ PY`,
 
     result
       ?.then(() => {
+        taskOutputHandlers.delete(id);
         markTerminalFinished(id, false, '\nTask completed successfully.\n');
         onSuccess?.();
       })
       .catch((error: Error) => {
+        taskOutputHandlers.delete(id);
         markTerminalFinished(id, true, `\nTask failed: ${error.message}\n`);
         onFailure?.(error);
       });
@@ -1076,6 +1292,14 @@ PY`,
 </script>
 
 <div class="screen" {@attach attachVnc}></div>
+
+{#if showRelativeMouseHint || relativeMouseEnabled}
+  <div class:active={relativeMouseEnabled} class="mouse-lock-hint">
+    {relativeMouseEnabled
+      ? 'Relative mouse active. Press Esc to release.'
+      : 'Game detected. Ctrl+click the desktop for relative mouse.'}
+  </div>
+{/if}
 
 <TerminalWindow
   {terminals}
@@ -1145,6 +1369,43 @@ PY`,
       max-width: none;
       max-height: none;
       object-fit: none;
+    }
+  }
+
+  .mouse-lock-hint {
+    position: fixed;
+    z-index: 120;
+    top: 0.75rem;
+    left: 50%;
+    max-width: calc(100vw - 1.5rem);
+    border-radius: 999px;
+    padding: 0.45rem 0.75rem;
+    background: color-mix(in srgb, var(--m3c-surface-container-highest) 88%, transparent);
+    color: var(--m3c-on-surface);
+    font-size: 0.8125rem;
+    font-weight: 650;
+    opacity: 0.9;
+    pointer-events: none;
+    translate: -50% 0;
+    animation: mouse-lock-hint-in 180ms ease-out;
+    box-shadow: 0 0.375rem 1.5rem rgb(0 0 0 / 0.18);
+
+    &.active {
+      background: var(--m3c-primary-container);
+      color: var(--m3c-on-primary-container);
+      opacity: 1;
+    }
+  }
+
+  @keyframes mouse-lock-hint-in {
+    from {
+      opacity: 0;
+      transform: translateY(-0.35rem);
+    }
+
+    to {
+      opacity: 0.9;
+      transform: translateY(0);
     }
   }
 
